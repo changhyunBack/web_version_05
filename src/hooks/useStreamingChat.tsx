@@ -17,7 +17,7 @@ export interface StreamingState {
 
 export const useStreamingChat = (
   activeThreadId: string | null,
-  onMessageComplete: (content: string) => void
+  onMessageComplete: (content: string, steps: StreamStep[]) => void
 ) => {
   const [streamingState, setStreamingState] = useState<StreamingState>({
     isStreaming: false,
@@ -111,7 +111,7 @@ export const useStreamingChat = (
         isStreaming: false
       }));
 
-      onMessageComplete(accumulatedContent);
+      onMessageComplete(accumulatedContent, steps);
 
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
@@ -149,7 +149,7 @@ export const useStreamingChat = (
       ...prev,
       isStreaming: false
     }));
-    onMessageComplete(streamingState.currentContent);
+    onMessageComplete(streamingState.currentContent, streamingState.steps);
   };
 
   return {
