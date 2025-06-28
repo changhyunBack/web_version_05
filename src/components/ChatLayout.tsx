@@ -64,10 +64,10 @@ export const ChatLayout = ({
               ) : (
                 <div>
                   {messages.map((message, index) => (
-                    <ChatMessage 
-                      key={index} 
-                      message={message} 
-                      onToggleSteps={message.role === 'assistant' ? handleToggleSteps : undefined}
+                    <ChatMessage
+                      key={index}
+                      message={message}
+                      onToggleSteps={message.role === 'assistant' ? () => handleToggleSteps(index) : undefined}
                     />
                   ))}
                   <div ref={messagesEndRef} />

@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { apiClient } from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
-import { useStreamingChat } from './useStreamingChat';
+import { useStreamingChat, StreamStep } from './useStreamingChat';
 
 export interface Message {
   role: 'user' | 'assistant';
@@ -10,7 +10,7 @@ export interface Message {
   image?: string;
   timestamp?: string;
   isStreaming?: boolean;
-  steps?: any[];
+  steps?: StreamStep[];
   showSteps?: boolean;
 }
 
@@ -30,6 +30,8 @@ export const useMessages = (activeThreadId: string | null, updateThreadTitle: (t
           hour: '2-digit',
           minute: '2-digit',
         });
+        lastMessage.steps = streamingState.steps;
+        lastMessage.showSteps = false;
       }
       return newMessages;
     });
@@ -55,15 +57,19 @@ export const useMessages = (activeThreadId: string | null, updateThreadTitle: (t
   const loadMessages = async (threadId: string) => {
     try {
       const messagesData = await apiClient.getMessages(threadId);
-      setMessages(messagesData.map(msg => ({
-        ...msg,
-        timestamp: msg.timestamp
-          ? new Date(msg.timestamp).toLocaleTimeString('ko-KR', {
-              hour: '2-digit',
-              minute: '2-digit',
-            })
-          : undefined,
-      })));
+      setMessages(
+        messagesData.map(msg => ({
+          ...msg,
+          timestamp: msg.timestamp
+            ? new Date(msg.timestamp).toLocaleTimeString('ko-KR', {
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            : undefined,
+          steps: msg.steps || [],
+          showSteps: false,
+        }))
+      );
     } catch (error) {
       toast({
         title: "오류",
@@ -122,14 +128,18 @@ export const useMessages = (activeThreadId: string | null, updateThreadTitle: (t
     }
   };
 
-  const handleToggleSteps = () => {
-    toggleSteps();
+  const handleToggleSteps = (index: number) => {
     setMessages(prev => {
       const newMessages = [...prev];
-      const lastMessage = newMessages[newMessages.length - 1];
-      if (lastMessage && lastMessage.role === 'assistant') {
-        lastMessage.showSteps = streamingState.showSteps;
-        lastMessage.steps = streamingState.steps;
+      const target = newMessages[index];
+      if (target && target.role === 'assistant') {
+        if (index === newMessages.length - 1 && streamingState.isStreaming) {
+          toggleSteps();
+          target.showSteps = !target.showSteps;
+          target.steps = streamingState.steps;
+        } else {
+          target.showSteps = !target.showSteps;
+        }
       }
       return newMessages;
     });
