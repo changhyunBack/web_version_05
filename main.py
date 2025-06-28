@@ -1,5 +1,5 @@
 # backend/main.py  ───────────────────────────────────────────
-import os, uuid, datetime as dt, hmac, hashlib, base64, asyncio
+import os, uuid, datetime as dt, hmac, hashlib, base64, asyncio, json
 from sqlalchemy import inspect
 from typing import List, Optional, Dict, Any
 from urllib.parse import urlparse
@@ -132,6 +132,7 @@ class Message(Base):
     role      = Column(String)   # "user" | "assistant"
     content   = Column(String)
     ts        = Column(DateTime, default=dt.datetime.utcnow)
+    steps     = Column(String)
     images    = relationship("MessageImage", cascade="all,delete", back_populates="message")
 
 class MessageImage(Base):
@@ -151,6 +152,11 @@ def _ensure_schema():
         if "url" not in cols:
             with engine.begin() as conn:
                 conn.exec_driver_sql("ALTER TABLE message_images ADD COLUMN url TEXT")
+    if "messages" in inspector.get_table_names():
+        cols = [col["name"] for col in inspector.get_columns("messages")]
+        if "steps" not in cols:
+            with engine.begin() as conn:
+                conn.exec_driver_sql("ALTER TABLE messages ADD COLUMN steps TEXT")
 
 _ensure_schema()
 
@@ -280,6 +286,7 @@ def get_messages(tid: str, db: Session = Depends(get_db), user=Depends(current_u
             "content": m.content,
             "image": img,
             "timestamp": m.ts.isoformat(),
+            "steps": json.loads(m.steps) if m.steps else [],
         }
 
     return [to_dict(m) for m in msgs]
@@ -350,6 +357,15 @@ async def chat_stream(req: ChatReq, db: Session = Depends(get_db), user=Depends(
         current_agent = None
         supervisor_streaming = False
         previous_agent = None
+        steps_data = []
+        tool_used = False
+
+        def add_step(step_type: str, content: str):
+            nonlocal tool_used
+            if not tool_used:
+                steps_data.append({"type": "step", "content": "🤖 질문을 분석하고 있습니다..."})
+                tool_used = True
+            steps_data.append({"type": step_type, "content": content})
         
         try:
             img = _prepare_image_for_openai(req.image) if req.image else None
@@ -361,7 +377,7 @@ async def chat_stream(req: ChatReq, db: Session = Depends(get_db), user=Depends(
             state = {"messages": [human]}
             cfg = RunnableConfig(configurable={"thread_id": req.thread_id}, callbacks=[])
 
-            # 초기 supervisor 시작 메시지
+            # 초기 supervisor 시작 메시지 (실시간 스트림만 전송)
             yield f"[STEP] 🤖 질문을 분석하고 있습니다...\n".encode()
 
             async for event in simple_agent.astream_events(state, cfg, version="v1"):
@@ -375,21 +391,28 @@ async def chat_stream(req: ChatReq, db: Session = Depends(get_db), user=Depends(
                     if "reliability_searcher" in event_name:
                         current_agent = "reliability_searcher"
                         if previous_agent != current_agent:
+                            add_step("step", "📋 신뢰성 전문가에게 전달합니다...")
                             yield f"[STEP] 📋 신뢰성 전문가에게 전달합니다...\n".encode()
+                            add_step("step", "🔍 신뢰성 정보를 검색하고 있습니다...")
                             yield f"[STEP] 🔍 신뢰성 정보를 검색하고 있습니다...\n".encode()
                     elif "websearcher" in event_name:
                         current_agent = "websearcher"
                         if previous_agent != current_agent:
+                            add_step("step", "🌐 웹 검색 전문가에게 전달합니다...")
                             yield f"[STEP] 🌐 웹 검색 전문가에게 전달합니다...\n".encode()
+                            add_step("step", "🔍 웹에서 최신 정보를 검색하고 있습니다...")
                             yield f"[STEP] 🔍 웹에서 최신 정보를 검색하고 있습니다...\n".encode()
                     elif "coder" in event_name:
                         current_agent = "coder"
                         if previous_agent != current_agent:
+                            add_step("step", "💻 코딩 전문가에게 전달합니다...")
                             yield f"[STEP] 💻 코딩 전문가에게 전달합니다...\n".encode()
+                            add_step("step", "🐍 코드를 실행하고 있습니다...")
                             yield f"[STEP] 🐍 코드를 실행하고 있습니다...\n".encode()
                     elif "supervisor" in event_name.lower() or event_name == "LangGraph":
                         if current_agent and current_agent != "supervisor":
                             # 에이전트에서 supervisor로 돌아왔을 때
+                            add_step("step", f"🤖 {get_agent_name(current_agent)} 작업이 완료되어 결과를 취합하고 있습니다...")
                             yield f"[STEP] 🤖 {get_agent_name(current_agent)} 작업이 완료되어 결과를 취합하고 있습니다...\n".encode()
                         current_agent = "supervisor"
 
@@ -397,10 +420,13 @@ async def chat_stream(req: ChatReq, db: Session = Depends(get_db), user=Depends(
                 elif event_type == "on_tool_start":
                     tool_name = event.get("name", "")
                     if tool_name == "RS":
+                        add_step("step", "📚 신뢰성 데이터베이스 검색 중...")
                         yield f"[STEP] 📚 신뢰성 데이터베이스 검색 중...\n".encode()
                     elif tool_name == "TavilySearch":
+                        add_step("step", "🔍 웹 검색 실행 중...")
                         yield f"[STEP] 🔍 웹 검색 실행 중...\n".encode()
                     elif tool_name == "PythonREPLTool":
+                        add_step("step", "🐍 Python 코드 실행 중...")
                         yield f"[STEP] 🐍 Python 코드 실행 중...\n".encode()
 
                 elif event_type == "on_tool_end":
@@ -422,20 +448,26 @@ async def chat_stream(req: ChatReq, db: Session = Depends(get_db), user=Depends(
                                 with open(path, "wb") as f:
                                     f.write(img_bytes)
                                 image_url = f"/images/{fname}"
+                                add_step("observation", "📊 그래프가 생성되었습니다.")
                                 yield "[OBS] 📊 그래프가 생성되었습니다.\n".encode()
                             except Exception as e:
                                 print(f"Image processing error: {e}")
+                                add_step("observation", "⚠️ 이미지 처리 중 오류가 발생했습니다.")
                                 yield "[OBS] ⚠️ 이미지 처리 중 오류가 발생했습니다.\n".encode()
                     else:
                         # Show tool completion with agent context
                         agent_name = get_agent_name(current_agent)
                         if tool_name == "RS":
+                            add_step("observation", f"✅ {agent_name}: 신뢰성 데이터 검색 완료")
                             yield f"[OBS] ✅ {agent_name}: 신뢰성 데이터 검색 완료\n".encode()
                         elif tool_name == "TavilySearch":
+                            add_step("observation", f"✅ {agent_name}: 웹 검색 완료")
                             yield f"[OBS] ✅ {agent_name}: 웹 검색 완료\n".encode()
                         elif tool_name == "PythonREPLTool":
+                            add_step("observation", f"✅ {agent_name}: 코드 실행 완료")
                             yield f"[OBS] ✅ {agent_name}: 코드 실행 완료\n".encode()
                         else:
+                            add_step("observation", f"✅ {agent_name}: 작업 완료")
                             yield f"[OBS] ✅ {agent_name}: 작업 완료\n".encode()
 
                 # Chat model streaming - ONLY from supervisor
@@ -448,6 +480,8 @@ async def chat_stream(req: ChatReq, db: Session = Depends(get_db), user=Depends(
                             if "IMAGE_DATA:" not in token:
                                 # 최종 응답 시작 시 메시지
                                 if not supervisor_streaming:
+                                    if tool_used:
+                                        add_step("step", "🎯 최종 답변을 생성하고 있습니다...")
                                     yield f"[STEP] 🎯 최종 답변을 생성하고 있습니다...\n".encode()
                                 supervisor_streaming = True
                                 assistant_acc += token
@@ -455,6 +489,8 @@ async def chat_stream(req: ChatReq, db: Session = Depends(get_db), user=Depends(
 
             # If supervisor didn't stream (fallback), get final result
             if not supervisor_streaming:
+                if tool_used:
+                    add_step("step", "🎯 최종 답변을 준비하고 있습니다...")
                 yield f"[STEP] 🎯 최종 답변을 준비하고 있습니다...\n".encode()
                 result = simple_agent.invoke(state, cfg)
                 final_answer = result["messages"][-1].content
@@ -486,7 +522,12 @@ async def chat_stream(req: ChatReq, db: Session = Depends(get_db), user=Depends(
                 user_msg.images.append(MessageImage(url=req.image))
 
             clean_content = assistant_acc.split("IMAGE_DATA:")[0].strip() if "IMAGE_DATA:" in assistant_acc else assistant_acc
-            assistant_msg = Message(thread_id=req.thread_id, role="assistant", content=clean_content)
+            assistant_msg = Message(
+                thread_id=req.thread_id,
+                role="assistant",
+                content=clean_content,
+                steps=json.dumps(steps_data) if tool_used else None,
+            )
             if image_url:
                 assistant_msg.images.append(MessageImage(url=image_url))
 

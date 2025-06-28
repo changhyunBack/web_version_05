@@ -22,6 +22,7 @@ export interface Message {
   content: string;
   image?: string;
   timestamp?: string;
+  steps?: { type: 'step' | 'observation'; content: string }[];
 }
 
 export interface ChatRequest {

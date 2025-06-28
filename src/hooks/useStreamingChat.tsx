@@ -104,6 +104,8 @@ export const useStreamingChat = (
         accumulatedContent += buffer.trim();
       }
 
+      accumulatedContent = accumulatedContent.replace(/\[DONE\]/g, '').trim();
+
       setStreamingState(prev => ({
         ...prev,
         isStreaming: false
