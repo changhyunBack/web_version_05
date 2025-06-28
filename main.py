@@ -357,14 +357,9 @@ async def chat_stream(req: ChatReq, db: Session = Depends(get_db), user=Depends(
         current_agent = None
         supervisor_streaming = False
         previous_agent = None
-        steps_data = []
-        tool_used = False
+        steps_data = [{"type": "step", "content": "🤖 질문을 분석하고 있습니다..."}]
 
         def add_step(step_type: str, content: str):
-            nonlocal tool_used
-            if not tool_used:
-                steps_data.append({"type": "step", "content": "🤖 질문을 분석하고 있습니다..."})
-                tool_used = True
             steps_data.append({"type": step_type, "content": content})
         
         try:
@@ -480,8 +475,7 @@ async def chat_stream(req: ChatReq, db: Session = Depends(get_db), user=Depends(
                             if "IMAGE_DATA:" not in token:
                                 # 최종 응답 시작 시 메시지
                                 if not supervisor_streaming:
-                                    if tool_used:
-                                        add_step("step", "🎯 최종 답변을 생성하고 있습니다...")
+                                    add_step("step", "🎯 최종 답변을 생성하고 있습니다...")
                                     yield f"[STEP] 🎯 최종 답변을 생성하고 있습니다...\n".encode()
                                 supervisor_streaming = True
                                 assistant_acc += token
@@ -489,8 +483,7 @@ async def chat_stream(req: ChatReq, db: Session = Depends(get_db), user=Depends(
 
             # If supervisor didn't stream (fallback), get final result
             if not supervisor_streaming:
-                if tool_used:
-                    add_step("step", "🎯 최종 답변을 준비하고 있습니다...")
+                add_step("step", "🎯 최종 답변을 준비하고 있습니다...")
                 yield f"[STEP] 🎯 최종 답변을 준비하고 있습니다...\n".encode()
                 result = simple_agent.invoke(state, cfg)
                 final_answer = result["messages"][-1].content
@@ -526,7 +519,7 @@ async def chat_stream(req: ChatReq, db: Session = Depends(get_db), user=Depends(
                 thread_id=req.thread_id,
                 role="assistant",
                 content=clean_content,
-                steps=json.dumps(steps_data) if tool_used else None,
+                steps=json.dumps(steps_data),
             )
             if image_url:
                 assistant_msg.images.append(MessageImage(url=image_url))
