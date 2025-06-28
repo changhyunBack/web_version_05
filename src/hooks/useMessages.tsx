@@ -14,25 +14,34 @@ export interface Message {
   showSteps?: boolean;
 }
 
-export const useMessages = (activeThreadId: string | null, updateThreadTitle: (threadId: string, title: string) => Promise<void>) => {
+export const useMessages = (
+  activeThreadId: string | null,
+  updateThreadTitle: (threadId: string, title: string) => Promise<void>
+) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const streamingMsgIndexRef = useRef<number | null>(null);
   const { toast } = useToast();
 
-  const handleMessageComplete = (content: string) => {
+  const handleMessageComplete = (content: string, steps: StreamStep[]) => {
     setMessages(prev => {
       const newMessages = [...prev];
-      const lastMessage = newMessages[newMessages.length - 1];
-      if (lastMessage && lastMessage.role === 'assistant') {
-        lastMessage.content = content;
-        lastMessage.isStreaming = false;
-        lastMessage.timestamp = new Date().toLocaleTimeString('ko-KR', {
+      const idx =
+        streamingMsgIndexRef.current !== null
+          ? streamingMsgIndexRef.current
+          : newMessages.length - 1;
+      const target = newMessages[idx];
+      if (target && target.role === 'assistant') {
+        target.content = content;
+        target.isStreaming = false;
+        target.timestamp = new Date().toLocaleTimeString('ko-KR', {
           hour: '2-digit',
           minute: '2-digit',
         });
-        lastMessage.steps = streamingState.steps;
-        lastMessage.showSteps = false;
+        target.steps = steps;
+        target.showSteps = false;
       }
+      streamingMsgIndexRef.current = null;
       return newMessages;
     });
   };
@@ -107,7 +116,10 @@ export const useMessages = (activeThreadId: string | null, updateThreadTitle: (t
       showSteps: false
     };
 
-    setMessages(prev => [...prev, streamingMessage]);
+    setMessages(prev => {
+      streamingMsgIndexRef.current = prev.length;
+      return [...prev, streamingMessage];
+    });
 
     try {
       await sendStreamingMessage(content, image);
